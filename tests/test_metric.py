@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.metric import CAPACITY_KWH, TARGET_COLS, metric, metric_by_group
+from src.metric import CAPACITY_KWH, TARGET_COLS, group_score, metric, metric_by_group
 
 
 def _make_df(values: dict) -> pd.DataFrame:
@@ -77,8 +77,69 @@ def test_ficr_step_function_bands():
     assert np.isclose(ficr_for_error_rate(0.09), 0.0), "오차율 9%는 단가 0 구간이어야 한다"
 
 
+def test_group_score_matches_metric_by_group():
+    """group_score()가 metric_by_group()과 완전히 같은 nmae/ficr를 내는지 확인한다.
+
+    group_score()는 교차검증에서 그룹 하나만 떼어 평가하려고 추가한 '입구'일 뿐이므로,
+    기존 산식과 값이 한 자리도 달라선 안 된다.
+    """
+    n = 500
+    rng = np.random.default_rng(7)
+    answer = _make_df({col: rng.uniform(0, CAPACITY_KWH[col], n) for col in TARGET_COLS})
+    pred = _make_df({col: answer[col] + rng.normal(0, CAPACITY_KWH[col] * 0.05, n) for col in TARGET_COLS})
+
+    by_group = metric_by_group(answer, pred)
+    for col in TARGET_COLS:
+        _, nmae, ficr = group_score(answer[col].to_numpy(), pred[col].to_numpy(), CAPACITY_KWH[col])
+        assert np.isclose(nmae, by_group[col]["nmae"]), f"{col} nmae 불일치"
+        assert np.isclose(ficr, by_group[col]["ficr"]), f"{col} ficr 불일치"
+
+
+def test_total_score_decomposes_into_group_mean():
+    """대회 total_score = 그룹별 점수의 단순 평균, 이라는 항등식을 확인한다.
+
+    이 항등식이 성립하기 때문에 '그룹별로 따로 하이퍼파라미터를 골라도
+    전체 total_score를 정확히 최적화하는 것'이 된다 (05_tuning.ipynb의 전제).
+    """
+    n = 500
+    rng = np.random.default_rng(11)
+    answer = _make_df({col: rng.uniform(0, CAPACITY_KWH[col], n) for col in TARGET_COLS})
+    pred = _make_df({col: answer[col] + rng.normal(0, CAPACITY_KWH[col] * 0.08, n) for col in TARGET_COLS})
+
+    total_score, _, _ = metric(answer, pred)
+    per_group = [group_score(answer[col].to_numpy(), pred[col].to_numpy(), CAPACITY_KWH[col])[0]
+                 for col in TARGET_COLS]
+
+    assert np.isclose(total_score, np.mean(per_group)), \
+        f"total_score({total_score})가 그룹별 점수 평균({np.mean(per_group)})과 다릅니다"
+
+
+def test_group_score_returns_nan_when_no_scored_hours():
+    """채점 대상(이용률 10% 이상) 시간이 하나도 없으면 nan을 반환해야 한다.
+
+    교차검증 폴드가 저풍속 구간에만 걸리는 경우를 대비한 방어 코드다.
+    """
+    cap = CAPACITY_KWH["kpx_group_1"]
+    actual = np.full(10, cap * 0.05)      # 전부 이용률 5% -> 채점 대상 0개
+    score, nmae, ficr = group_score(actual, actual, cap)
+    assert np.isnan(score) and np.isnan(nmae) and np.isnan(ficr)
+
+
+def test_group_score_ignores_nan_actuals():
+    """actual이 NaN인 행(kpx_group_3의 2022년 등)은 자동으로 제외되어야 한다."""
+    cap = CAPACITY_KWH["kpx_group_3"]
+    actual = np.array([np.nan, cap * 0.5, np.nan, cap * 0.8])
+    forecast = np.array([0.0, cap * 0.5, 0.0, cap * 0.8])   # NaN 행은 완전히 틀리게 예측
+    score, nmae, ficr = group_score(actual, forecast, cap)
+    assert np.isclose(nmae, 0.0) and np.isclose(ficr, 1.0), "NaN 행이 점수에 섞여 들어갔습니다"
+
+
 if __name__ == "__main__":
     test_perfect_prediction_gives_score_1()
     test_low_utilization_hours_are_excluded()
     test_ficr_step_function_bands()
+    test_group_score_matches_metric_by_group()
+    test_total_score_decomposes_into_group_mean()
+    test_group_score_returns_nan_when_no_scored_hours()
+    test_group_score_ignores_nan_actuals()
     print("OK: test_metric.py 전체 통과")

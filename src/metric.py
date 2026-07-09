@@ -88,3 +88,49 @@ def metric_by_group(answer_df, pred_df):
         ficr = np.sum(actual * unit_price) / np.sum(actual * 4.0)
         result[col] = {"nmae": nmae, "ficr": ficr}
     return result
+
+
+def group_score(actual, forecast, capacity):
+    """
+    한 그룹만 떼어 내서 그 그룹의 점수를 계산한다 (교차검증 폴드 평가용).
+
+    왜 이 함수가 필요한가:
+        metric()은 3개 그룹을 한꺼번에 받도록 되어 있다. 그런데 교차검증에서는
+        그룹마다 학습 가능한 기간이 다르고(kpx_group_3는 2023년부터), 폴드도 달라진다.
+        그래서 "그룹 하나 + 그 그룹의 예측"만으로 점수를 낼 수 있어야 한다.
+
+    이렇게 해도 되는 이유 (산식에서 유도한 항등식):
+        total_score = 0.5*(1 - mean_g NMAE_g) + 0.5*(mean_g FICR_g)
+                    = mean_g [ 0.5*(1 - NMAE_g) + 0.5*FICR_g ]
+        즉 대회 점수는 '그룹별 점수의 단순 평균'으로 정확히 분해된다.
+        따라서 그룹별로 따로 하이퍼파라미터를 골라 각 그룹 점수를 최대화하면
+        전체 total_score도 최대가 된다. (그룹 간 상호작용이 없다.)
+
+    입력:
+        actual   : 그 그룹의 실제 발전량 배열 [kWh]. NaN이 섞여 있어도 된다(자동 제외).
+        forecast : 같은 길이의 예측값 배열 [kWh].
+        capacity : 그 그룹의 설비용량 [kWh/h]. 예: 21600.
+
+    출력:
+        (score, nmae, ficr) 튜플.
+        - score = 0.5*(1 - nmae) + 0.5*ficr  (그 그룹의 total_score 기여분)
+        - 채점 대상(actual >= capacity*0.10)이 하나도 없으면 (nan, nan, nan)을 반환한다.
+
+    주의:
+        metric()의 계산 로직과 완전히 동일하다(그룹 루프 안의 내용을 그대로 옮긴 것).
+        산식을 바꾼 것이 아니라 '한 그룹만 계산하는 입구'를 추가한 것이다.
+        tests/test_metric.py에서 metric_by_group()과 값이 일치하는지 검증한다.
+    """
+    actual = np.asarray(actual, dtype=float)
+    forecast = np.asarray(forecast, dtype=float)
+
+    valid = actual >= capacity * 0.10          # 이용률 10% 이상 시간대만 평가 (NaN은 False가 되어 자동 제외)
+    if not np.any(valid):
+        return float("nan"), float("nan"), float("nan")
+
+    actual, forecast = actual[valid], forecast[valid]
+    error_rate = np.abs(forecast - actual) / capacity
+    nmae = np.mean(error_rate)
+    unit_price = np.select([error_rate <= 0.06, error_rate <= 0.08], [4.0, 3.0], default=0.0)
+    ficr = np.sum(actual * unit_price) / np.sum(actual * 4.0)
+    return 0.5 * (1.0 - nmae) + 0.5 * ficr, nmae, ficr
