@@ -2,3 +2,4 @@
 
 - [phase0_foundation.md](phase0_foundation.md) — 대회 산식(`src/metric.py`)과 제출 파일 생성·검증(`src/submission.py`) 코드 작성 및 단위 테스트
 - [phase0_preprocessing.md](phase0_preprocessing.md) — `01_preprocessing.ipynb`: LDAPS/GFS pivot, 라벨 조인, SCADA 단위 검증(합 vs 평균) 및 parquet 캐시 저장
+- [phase1_eda.md](phase1_eda.md) — `02_eda.ipynb`: 이용률 분포, 시간대/월별 발전 패턴, SCADA 파워커브(센서 이상치 발견·제외), 터빈 정지/결빙 의심 구간, 예보-실측 풍속 상관·편향 분석
